@@ -5,6 +5,7 @@ import SubscriptionCard from './components/SubscriptionCard';
 import SubscriptionModal from './components/SubscriptionModal';
 import GmailImportModal from './components/GmailImportModal';
 import StatCard from './components/StatCard';
+import AIInsightsPanel from './components/AIInsightsPanel';
 import { CATEGORY_COLORS } from './data';
 import type { Category, SortDirection, SortField, Subscription } from './types';
 import type { ParsedSubscription } from './services/gmail';
@@ -381,6 +382,8 @@ export default function App() {
                 </ul>
               </div>
             )}
+
+            <AIInsightsPanel subscriptions={subscriptions} />
 
             <div className="sidebar-card">
               <h3 className="sidebar-title">📂 By Category</h3>
