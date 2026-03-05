@@ -4,6 +4,18 @@ import { formatCurrency, toMonthly, toYearly } from '../utils';
 const STORAGE_KEY = 'substracks-gemini-key';
 const MODEL = 'gemini-3.1-flash-lite';
 
+// Env var (set in Vercel) takes priority; localStorage is the manual fallback.
+const ENV_KEY: string = import.meta.env.VITE_GEMINI_API_KEY ?? '';
+
+export function getEffectiveKey(): string {
+  return ENV_KEY || localStorage.getItem(STORAGE_KEY) || '';
+}
+
+/** True when the key comes from the environment — no manual setup needed. */
+export function isEnvKey(): boolean {
+  return Boolean(ENV_KEY);
+}
+
 export function getStoredGeminiKey(): string {
   return localStorage.getItem(STORAGE_KEY) ?? '';
 }

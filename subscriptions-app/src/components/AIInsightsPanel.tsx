@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Subscription } from '../types';
-import { fetchAIInsights, getStoredGeminiKey, saveGeminiKey } from '../services/gemini';
+import { fetchAIInsights, getEffectiveKey, getStoredGeminiKey, isEnvKey, saveGeminiKey } from '../services/gemini';
 
 interface Props {
   subscriptions: Subscription[];
@@ -9,13 +9,14 @@ interface Props {
 type PanelState = 'setup' | 'idle' | 'loading' | 'done' | 'error';
 
 export default function AIInsightsPanel({ subscriptions }: Props) {
-  const [apiKey, setApiKey]       = useState(getStoredGeminiKey);
+  const [apiKey, setApiKey]       = useState(getEffectiveKey);
   const [keyInput, setKeyInput]   = useState('');
-  const [state, setState]         = useState<PanelState>(() => (getStoredGeminiKey() ? 'idle' : 'setup'));
+  const [state, setState]         = useState<PanelState>(() => (getEffectiveKey() ? 'idle' : 'setup'));
   const [insights, setInsights]   = useState('');
   const [error, setError]         = useState('');
   const [showKey, setShowKey]     = useState(false);
   const inputRef                  = useRef<HTMLInputElement>(null);
+  const envKeyActive              = isEnvKey();
 
   // Focus input when panel switches to setup
   useEffect(() => {
@@ -43,7 +44,7 @@ export default function AIInsightsPanel({ subscriptions }: Props) {
     setState('loading');
     setError('');
     try {
-      const result = await fetchAIInsights(apiKey, subscriptions);
+      const result = await fetchAIInsights(getEffectiveKey(), subscriptions);
       setInsights(result);
       setState('done');
     } catch (e) {
@@ -128,9 +129,11 @@ export default function AIInsightsPanel({ subscriptions }: Props) {
           <button className="btn btn-primary ai-analyze-btn" onClick={handleAnalyze}>
             ✨ Analyze my subscriptions
           </button>
-          <button className="ai-change-key" onClick={handleRemoveKey}>
-            Change API key
-          </button>
+          {!envKeyActive && (
+            <button className="ai-change-key" onClick={handleRemoveKey}>
+              Change API key
+            </button>
+          )}
         </div>
       )}
 
@@ -150,9 +153,11 @@ export default function AIInsightsPanel({ subscriptions }: Props) {
             <button className="btn btn-ghost ai-refresh-btn" onClick={handleAnalyze}>
               ↻ Refresh
             </button>
-            <button className="ai-change-key" onClick={handleRemoveKey}>
-              Change key
-            </button>
+            {!envKeyActive && (
+              <button className="ai-change-key" onClick={handleRemoveKey}>
+                Change key
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -165,9 +170,11 @@ export default function AIInsightsPanel({ subscriptions }: Props) {
             <button className="btn btn-ghost ai-refresh-btn" onClick={handleAnalyze}>
               Retry
             </button>
-            <button className="ai-change-key" onClick={handleRemoveKey}>
-              Change key
-            </button>
+            {!envKeyActive && (
+              <button className="ai-change-key" onClick={handleRemoveKey}>
+                Change key
+              </button>
+            )}
           </div>
         </div>
       )}
