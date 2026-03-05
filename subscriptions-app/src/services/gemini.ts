@@ -2,7 +2,7 @@ import type { Subscription } from '../types';
 import { formatCurrency, toMonthly, toYearly } from '../utils';
 
 const STORAGE_KEY = 'substracks-gemini-key';
-const MODEL = 'gemini-2.0-flash';
+const MODEL = 'gemini-2.0-flash-lite';
 
 export function getStoredGeminiKey(): string {
   return localStorage.getItem(STORAGE_KEY) ?? '';
