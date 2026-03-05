@@ -1,10 +1,14 @@
 import { useMemo, useState } from 'react';
+import { useGoogleLogin } from '@react-oauth/google';
 import './App.css';
 import SubscriptionCard from './components/SubscriptionCard';
 import SubscriptionModal from './components/SubscriptionModal';
+import GmailImportModal from './components/GmailImportModal';
 import StatCard from './components/StatCard';
-import { CATEGORY_COLORS, SAMPLE_SUBSCRIPTIONS } from './data';
+import { CATEGORY_COLORS } from './data';
 import type { Category, SortDirection, SortField, Subscription } from './types';
+import type { ParsedSubscription } from './services/gmail';
+import { fetchBillingEmails, parseEmailsToSubscriptions, parsedToSubscription } from './services/gmail';
 import {
   daysUntilRenewal,
   formatCurrency,
@@ -21,7 +25,7 @@ function loadSubscriptions(): Subscription[] {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
   } catch {}
-  return SAMPLE_SUBSCRIPTIONS;
+  return [];
 }
 
 function saveSubscriptions(subs: Subscription[]) {
@@ -38,6 +42,12 @@ export default function App() {
   const [sortField, setSortField] = useState<SortField>('nextRenewal');
   const [sortDir, setSortDir] = useState<SortDirection>('asc');
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+
+  // Gmail state
+  const [gmailToken, setGmailToken] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [parsedEmails, setParsedEmails] = useState<ParsedSubscription[] | null>(null);
 
   function mutate(next: Subscription[]) {
     setSubscriptions(next);
@@ -83,6 +93,51 @@ export default function App() {
       setSortDir('asc');
     }
   }
+
+  // Gmail OAuth login
+  const connectGmail = useGoogleLogin({
+    scope: 'https://www.googleapis.com/auth/gmail.readonly',
+    onSuccess: async (tokenResponse) => {
+      const token = tokenResponse.access_token;
+      setGmailToken(token);
+      await scanEmails(token);
+    },
+    onError: () => setSyncError('Google sign-in was cancelled or failed.'),
+  });
+
+  async function scanEmails(token: string) {
+    setIsSyncing(true);
+    setSyncError(null);
+    try {
+      const emails = await fetchBillingEmails(token);
+      const parsed = parseEmailsToSubscriptions(emails);
+      setParsedEmails(parsed);
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : 'Failed to scan emails.');
+    } finally {
+      setIsSyncing(false);
+    }
+  }
+
+  function handleImport(selected: ParsedSubscription[]) {
+    const existingNames = new Set(subscriptions.map((s) => s.name.toLowerCase()));
+    const toAdd = selected
+      .filter((p) => !existingNames.has(p.name.toLowerCase()))
+      .map(parsedToSubscription);
+    mutate([...subscriptions, ...toAdd]);
+    setParsedEmails(null);
+  }
+
+  function disconnectGmail() {
+    setGmailToken(null);
+    setParsedEmails(null);
+    setSyncError(null);
+  }
+
+  const existingNames = useMemo(
+    () => new Set(subscriptions.map((s) => s.name.toLowerCase())),
+    [subscriptions]
+  );
 
   const categories = useMemo(
     () => ['All', ...Array.from(new Set(subscriptions.map((s) => s.category)))],
@@ -143,11 +198,48 @@ export default function App() {
             <span className="brand-icon">💳</span>
             <h1>SubsTrack</h1>
           </div>
-          <button className="btn btn-primary header-add-btn" onClick={openAdd}>
-            +<span className="btn-add-label"> Add Subscription</span>
-          </button>
+          <div className="header-actions">
+            {gmailToken ? (
+              <>
+                <button
+                  className="btn btn-gmail-connected"
+                  onClick={() => scanEmails(gmailToken)}
+                  disabled={isSyncing}
+                  title="Scan inbox again"
+                >
+                  {isSyncing ? (
+                    <><span className="spinner" /> <span className="btn-add-label">Scanning…</span></>
+                  ) : (
+                    <><span>📧</span> <span className="btn-add-label">Scan again</span></>
+                  )}
+                </button>
+                <button className="btn btn-ghost btn-disconnect" onClick={disconnectGmail} title="Disconnect Gmail">
+                  ✕
+                </button>
+              </>
+            ) : (
+              <button
+                className="btn btn-gmail"
+                onClick={() => connectGmail()}
+                disabled={isSyncing}
+              >
+                <span>📧</span>
+                <span className="btn-add-label"> Connect Gmail</span>
+              </button>
+            )}
+            <button className="btn btn-primary header-add-btn" onClick={openAdd}>
+              +<span className="btn-add-label"> Add</span>
+            </button>
+          </div>
         </div>
       </header>
+
+      {syncError && (
+        <div className="sync-error-bar">
+          ⚠ {syncError}
+          <button onClick={() => setSyncError(null)}>✕</button>
+        </div>
+      )}
 
       <main className="app-main">
         <section className="stats-grid">
@@ -231,10 +323,25 @@ export default function App() {
             {filtered.length === 0 ? (
               <div className="empty-state">
                 <span className="empty-icon">📭</span>
-                <p>No subscriptions found</p>
-                <button className="btn btn-primary" onClick={openAdd}>
-                  Add your first subscription
-                </button>
+                {subscriptions.length === 0 ? (
+                  <>
+                    <p>No subscriptions yet</p>
+                    <p className="empty-hint">Import from Gmail to auto-detect your subscriptions,<br />or add them manually.</p>
+                    <div className="empty-actions">
+                      <button className="btn btn-gmail" onClick={() => connectGmail()} disabled={isSyncing}>
+                        📧 Connect Gmail
+                      </button>
+                      <button className="btn btn-ghost" onClick={openAdd}>+ Add manually</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p>No subscriptions match your filters</p>
+                    <button className="btn btn-ghost" onClick={() => { setSearch(''); setFilterCategory('All'); setFilterStatus('all'); }}>
+                      Clear filters
+                    </button>
+                  </>
+                )}
               </div>
             ) : (
               <div className="cards-grid">
@@ -277,32 +384,30 @@ export default function App() {
 
             <div className="sidebar-card">
               <h3 className="sidebar-title">📂 By Category</h3>
-              <ul className="category-list">
-                {byCategory.map(([cat, cost]) => {
-                  const pct = monthlyCost > 0 ? (cost / monthlyCost) * 100 : 0;
-                  return (
-                    <li key={cat} className="category-item">
-                      <div className="category-item-header">
-                        <span
-                          className="category-dot"
-                          style={{ background: CATEGORY_COLORS[cat] || '#9CA3AF' }}
-                        />
-                        <span className="category-name">{cat}</span>
-                        <span className="category-amount">{formatCurrency(cost)}</span>
-                      </div>
-                      <div className="category-bar">
-                        <div
-                          className="category-bar-fill"
-                          style={{
-                            width: `${pct}%`,
-                            background: CATEGORY_COLORS[cat] || '#9CA3AF',
-                          }}
-                        />
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
+              {byCategory.length === 0 ? (
+                <p className="sidebar-empty">No data yet</p>
+              ) : (
+                <ul className="category-list">
+                  {byCategory.map(([cat, cost]) => {
+                    const pct = monthlyCost > 0 ? (cost / monthlyCost) * 100 : 0;
+                    return (
+                      <li key={cat} className="category-item">
+                        <div className="category-item-header">
+                          <span className="category-dot" style={{ background: CATEGORY_COLORS[cat] || '#9CA3AF' }} />
+                          <span className="category-name">{cat}</span>
+                          <span className="category-amount">{formatCurrency(cost)}</span>
+                        </div>
+                        <div className="category-bar">
+                          <div
+                            className="category-bar-fill"
+                            style={{ width: `${pct}%`, background: CATEGORY_COLORS[cat] || '#9CA3AF' }}
+                          />
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </div>
           </aside>
         </div>
@@ -312,15 +417,27 @@ export default function App() {
         <SubscriptionModal
           subscription={editTarget}
           onSave={handleSave}
-          onClose={() => {
-            setModalOpen(false);
-            setEditTarget(undefined);
-          }}
+          onClose={() => { setModalOpen(false); setEditTarget(undefined); }}
+        />
+      )}
+
+      {parsedEmails !== null && (
+        <GmailImportModal
+          parsed={parsedEmails}
+          existing={existingNames}
+          onImport={handleImport}
+          onClose={() => setParsedEmails(null)}
         />
       )}
 
       {deleteConfirm && (
         <div className="toast">Click delete again to confirm removal</div>
+      )}
+
+      {isSyncing && (
+        <div className="toast toast-syncing">
+          <span className="spinner" /> Scanning Gmail for billing emails…
+        </div>
       )}
 
       {/* FAB — visible only on mobile via CSS */}
