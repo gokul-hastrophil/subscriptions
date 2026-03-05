@@ -143,8 +143,8 @@ export default function App() {
             <span className="brand-icon">💳</span>
             <h1>SubsTrack</h1>
           </div>
-          <button className="btn btn-primary" onClick={openAdd}>
-            + Add Subscription
+          <button className="btn btn-primary header-add-btn" onClick={openAdd}>
+            +<span className="btn-add-label"> Add Subscription</span>
           </button>
         </div>
       </header>
@@ -322,6 +322,11 @@ export default function App() {
       {deleteConfirm && (
         <div className="toast">Click delete again to confirm removal</div>
       )}
+
+      {/* FAB — visible only on mobile via CSS */}
+      <button className="fab" onClick={openAdd} aria-label="Add subscription">
+        +
+      </button>
     </div>
   );
 }
