@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Subscription } from '../types';
-import { fetchAIInsights, getEffectiveKey, getStoredGeminiKey, isEnvKey, saveGeminiKey } from '../services/gemini';
+import { fetchAIInsights, getEffectiveKey, isEnvKey, saveGeminiKey } from '../services/gemini';
 
 interface Props {
   subscriptions: Subscription[];
@@ -9,7 +9,6 @@ interface Props {
 type PanelState = 'setup' | 'idle' | 'loading' | 'done' | 'error';
 
 export default function AIInsightsPanel({ subscriptions }: Props) {
-  const [apiKey, setApiKey]       = useState(getEffectiveKey);
   const [keyInput, setKeyInput]   = useState('');
   const [state, setState]         = useState<PanelState>(() => (getEffectiveKey() ? 'idle' : 'setup'));
   const [insights, setInsights]   = useState('');
@@ -27,14 +26,12 @@ export default function AIInsightsPanel({ subscriptions }: Props) {
     const trimmed = keyInput.trim();
     if (!trimmed) return;
     saveGeminiKey(trimmed);
-    setApiKey(trimmed);
     setKeyInput('');
     setState('idle');
   }
 
   function handleRemoveKey() {
     saveGeminiKey('');
-    setApiKey('');
     setInsights('');
     setError('');
     setState('setup');
