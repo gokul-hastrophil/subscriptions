@@ -24,7 +24,12 @@ export default function SubscriptionCard({ subscription, onEdit, onDelete, onTog
             {subscription.name.charAt(0).toUpperCase()}
           </div>
           <div className="sub-card-info">
-            <h3>{subscription.name}</h3>
+            <div className="sub-card-name-row">
+              <h3>{subscription.name}</h3>
+              {subscription.source === 'gmail' && (
+                <span className="gmail-source-badge" title="Imported from Gmail">📧</span>
+              )}
+            </div>
             <span className="sub-card-category">{subscription.category}</span>
           </div>
           <div className="sub-card-actions">

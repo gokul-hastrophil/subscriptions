@@ -21,6 +21,7 @@ export interface Subscription {
   logo?: string;
   active: boolean;
   notes?: string;
+  source?: 'manual' | 'gmail';
 }
 
 export type SortField = 'name' | 'amount' | 'nextRenewal' | 'category';
