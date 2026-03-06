@@ -49,9 +49,9 @@ export default function GmailImportModal({ parsed, existing, onImport, onClose }
       <div className="modal gmail-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div>
-            <h2>📧 Import from Gmail</h2>
+            <h2>🤖 AI-Detected Subscriptions</h2>
             <p className="gmail-modal-subtitle">
-              Found {parsed.length} subscription{parsed.length !== 1 ? 's' : ''} in your emails
+              Found {parsed.length} active subscription{parsed.length !== 1 ? 's' : ''} in your emails
             </p>
           </div>
           <button className="btn-icon" onClick={onClose} aria-label="Close">✕</button>
@@ -60,9 +60,10 @@ export default function GmailImportModal({ parsed, existing, onImport, onClose }
         {parsed.length === 0 ? (
           <div className="gmail-empty">
             <span>📭</span>
-            <p>No subscription billing emails found.</p>
+            <p>No active subscriptions detected.</p>
             <p className="gmail-empty-hint">
-              Make sure your billing emails are in your inbox, not in spam or archived folders.
+              AI didn't find any recurring billing emails. Try adding subscriptions manually,
+              or check that billing emails aren't in spam/archived folders.
             </p>
           </div>
         ) : (
