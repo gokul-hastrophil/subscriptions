@@ -26,3 +26,9 @@ export interface Subscription {
 
 export type SortField = 'name' | 'amount' | 'nextRenewal' | 'category';
 export type SortDirection = 'asc' | 'desc';
+
+export interface GoogleUser {
+  name: string;
+  email: string;
+  picture: string;
+}

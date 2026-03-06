@@ -1,4 +1,4 @@
-import type { BillingCycle, Category, Subscription } from '../types';
+import type { BillingCycle, Category, GoogleUser, Subscription } from '../types';
 import { generateId } from '../utils';
 
 // ── Sender → service name map ────────────────────────────────────────────────
@@ -333,53 +333,33 @@ export async function fetchBillingEmails(accessToken: string): Promise<GmailMess
   return details;
 }
 
-export function parseEmailsToSubscriptions(emails: GmailMessageDetail[]): ParsedSubscription[] {
-  const map = new Map<string, ParsedSubscription>();
+// ── Email data for AI analysis ───────────────────────────────────────────────
 
-  for (const email of emails) {
-    const from    = getHeader(email.payload.headers, 'From');
-    const subject = getHeader(email.payload.headers, 'Subject');
-    const date    = getHeader(email.payload.headers, 'Date');
-    const text    = `${subject} ${email.snippet}`;
+export interface EmailForAI {
+  from: string;
+  subject: string;
+  date: string;
+  snippet: string;
+}
 
-    // Resolve service from SENDER_MAP (tries full subdomain path first)
-    const knownService = lookupSender(from);
+/** Flatten GmailMessageDetail[] into simple objects for the AI analyser. */
+export function prepareEmailsForAI(emails: GmailMessageDetail[]): EmailForAI[] {
+  return emails.map((e) => ({
+    from:    getHeader(e.payload.headers, 'From'),
+    subject: getHeader(e.payload.headers, 'Subject'),
+    date:    getHeader(e.payload.headers, 'Date'),
+    snippet: e.snippet ?? '',
+  }));
+}
 
-    // Always extract a name — fall back to display name / domain for unknowns
-    const serviceName     = knownService?.name     ?? extractServiceName(from);
-    const serviceCategory = knownService?.category ?? 'Other';
-    const serviceColor    = knownService?.color    ?? '#6B7280';
+// ── User profile ─────────────────────────────────────────────────────────────
 
-    const amount = extractAmount(text);
-
-    // For unknown senders we still require an amount to avoid false positives.
-    // For known senders we can accept a zero/missing amount (plan may be free-tier or amount in body).
-    if (!amount && !knownService) continue;
-
-    const cycle = extractBillingCycle(text);
-    const key   = `${serviceName}|${amount ?? 0}|${cycle}`;
-
-    const emailDate = date
-      ? new Date(date).toISOString().split('T')[0]
-      : new Date().toISOString().split('T')[0];
-
-    // Keep the most recent email per unique (service + amount + cycle)
-    const existing = map.get(key);
-    if (!existing || emailDate > existing.lastEmailDate) {
-      map.set(key, {
-        id: generateId(),
-        name: serviceName,
-        amount: amount ?? 0,
-        billingCycle: cycle,
-        category: serviceCategory,
-        color: serviceColor,
-        lastEmailDate: emailDate,
-        emailId: email.id,
-      });
-    }
-  }
-
-  return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+export async function fetchUserProfile(accessToken: string): Promise<GoogleUser> {
+  const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error(`Failed to fetch user profile: ${res.status}`);
+  return res.json() as Promise<GoogleUser>;
 }
 
 export function parsedToSubscription(p: ParsedSubscription): Subscription {

@@ -6,10 +6,12 @@ import SubscriptionModal from './components/SubscriptionModal';
 import GmailImportModal from './components/GmailImportModal';
 import StatCard from './components/StatCard';
 import AIInsightsPanel from './components/AIInsightsPanel';
+import LoginPage from './components/LoginPage';
 import { CATEGORY_COLORS } from './data';
-import type { Category, SortDirection, SortField, Subscription } from './types';
+import type { Category, GoogleUser, SortDirection, SortField, Subscription } from './types';
 import type { ParsedSubscription } from './services/gmail';
-import { fetchBillingEmails, parseEmailsToSubscriptions, parsedToSubscription } from './services/gmail';
+import { fetchBillingEmails, fetchUserProfile, parsedToSubscription, prepareEmailsForAI } from './services/gmail';
+import { analyzeEmailsForSubscriptions, getEffectiveKey } from './services/gemini';
 import {
   daysUntilRenewal,
   formatCurrency,
@@ -39,14 +41,20 @@ export default function App() {
   const [editTarget, setEditTarget] = useState<Subscription | undefined>();
   const [search, setSearch] = useState('');
   const [filterCategory, setFilterCategory] = useState<Category | 'All'>('All');
-  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('active');
   const [sortField, setSortField] = useState<SortField>('nextRenewal');
   const [sortDir, setSortDir] = useState<SortDirection>('asc');
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
-  // Gmail state
+  // Auth state
+  const [user, setUser] = useState<GoogleUser | null>(null);
   const [gmailToken, setGmailToken] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+
+  // Scan state
   const [isSyncing, setIsSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState('');
   const [syncError, setSyncError] = useState<string | null>(null);
   const [parsedEmails, setParsedEmails] = useState<ParsedSubscription[] | null>(null);
 
@@ -95,28 +103,65 @@ export default function App() {
     }
   }
 
-  // Gmail OAuth login
-  const connectGmail = useGoogleLogin({
+  // ── Google sign-in ─────────────────────────────────────────────────────────
+
+  const signIn = useGoogleLogin({
     scope: 'https://www.googleapis.com/auth/gmail.readonly',
     onSuccess: async (tokenResponse) => {
-      const token = tokenResponse.access_token;
-      setGmailToken(token);
-      await scanEmails(token);
+      await handleLogin(tokenResponse.access_token);
     },
-    onError: () => setSyncError('Google sign-in was cancelled or failed.'),
+    onError: () => {
+      setIsLoggingIn(false);
+      setLoginError('Google sign-in was cancelled or failed.');
+    },
   });
 
+  async function handleLogin(accessToken: string) {
+    setIsLoggingIn(true);
+    setLoginError(null);
+    try {
+      const profile = await fetchUserProfile(accessToken);
+      setUser(profile);
+      setGmailToken(accessToken);
+      await scanEmails(accessToken);
+    } catch (e) {
+      setLoginError(e instanceof Error ? e.message : 'Sign-in failed.');
+    } finally {
+      setIsLoggingIn(false);
+    }
+  }
+
+  function handleSignOut() {
+    setUser(null);
+    setGmailToken(null);
+    setParsedEmails(null);
+    setSyncError(null);
+    setSyncStatus('');
+    setLoginError(null);
+  }
+
+  // ── Email scanning ─────────────────────────────────────────────────────────
+
   async function scanEmails(token: string) {
+    const apiKey = getEffectiveKey();
+    if (!apiKey) {
+      setSyncError('AI analysis requires a Gemini API key. Set VITE_GEMINI_API_KEY in your Vercel environment variables.');
+      return;
+    }
     setIsSyncing(true);
     setSyncError(null);
+    setSyncStatus('Fetching billing emails…');
     try {
-      const emails = await fetchBillingEmails(token);
-      const parsed = parseEmailsToSubscriptions(emails);
+      const rawEmails = await fetchBillingEmails(token);
+      setSyncStatus(`Analyzing ${rawEmails.length} emails with AI…`);
+      const emailData = prepareEmailsForAI(rawEmails);
+      const parsed = await analyzeEmailsForSubscriptions(emailData, apiKey);
       setParsedEmails(parsed);
     } catch (e) {
       setSyncError(e instanceof Error ? e.message : 'Failed to scan emails.');
     } finally {
       setIsSyncing(false);
+      setSyncStatus('');
     }
   }
 
@@ -129,11 +174,7 @@ export default function App() {
     setParsedEmails(null);
   }
 
-  function disconnectGmail() {
-    setGmailToken(null);
-    setParsedEmails(null);
-    setSyncError(null);
-  }
+  // ── Derived data ───────────────────────────────────────────────────────────
 
   const existingNames = useMemo(
     () => new Set(subscriptions.map((s) => s.name.toLowerCase())),
@@ -191,6 +232,20 @@ export default function App() {
     return sortDir === 'asc' ? ' ↑' : ' ↓';
   };
 
+  // ── Auth gate ──────────────────────────────────────────────────────────────
+
+  if (!user) {
+    return (
+      <LoginPage
+        onSignIn={() => { setIsLoggingIn(true); signIn(); }}
+        isLoading={isLoggingIn}
+        error={loginError}
+      />
+    );
+  }
+
+  // ── Dashboard ──────────────────────────────────────────────────────────────
+
   return (
     <div className="app">
       <header className="app-header">
@@ -200,34 +255,34 @@ export default function App() {
             <h1>SubsTrack</h1>
           </div>
           <div className="header-actions">
-            {gmailToken ? (
-              <>
-                <button
-                  className="btn btn-gmail-connected"
-                  onClick={() => scanEmails(gmailToken)}
-                  disabled={isSyncing}
-                  title="Scan inbox again"
-                >
-                  {isSyncing ? (
-                    <><span className="spinner" /> <span className="btn-add-label">Scanning…</span></>
-                  ) : (
-                    <><span>📧</span> <span className="btn-add-label">Scan again</span></>
-                  )}
-                </button>
-                <button className="btn btn-ghost btn-disconnect" onClick={disconnectGmail} title="Disconnect Gmail">
-                  ✕
-                </button>
-              </>
-            ) : (
-              <button
-                className="btn btn-gmail"
-                onClick={() => connectGmail()}
-                disabled={isSyncing}
-              >
-                <span>📧</span>
-                <span className="btn-add-label"> Connect Gmail</span>
+            <button
+              className="btn btn-gmail-connected"
+              onClick={() => gmailToken && scanEmails(gmailToken)}
+              disabled={isSyncing || !gmailToken}
+              title="Re-scan inbox for subscriptions"
+            >
+              {isSyncing ? (
+                <><span className="spinner" /> <span className="btn-add-label">Scanning…</span></>
+              ) : (
+                <><span>🔍</span> <span className="btn-add-label">Scan emails</span></>
+              )}
+            </button>
+
+            <div className="user-info">
+              {user.picture && (
+                <img
+                  src={user.picture}
+                  alt={user.name}
+                  className="user-avatar"
+                  referrerPolicy="no-referrer"
+                />
+              )}
+              <span className="user-name">{user.name}</span>
+              <button className="btn-signout" onClick={handleSignOut} title="Sign out">
+                Sign out
               </button>
-            )}
+            </div>
+
             <button className="btn btn-primary header-add-btn" onClick={openAdd}>
               +<span className="btn-add-label"> Add</span>
             </button>
@@ -327,10 +382,17 @@ export default function App() {
                 {subscriptions.length === 0 ? (
                   <>
                     <p>No subscriptions yet</p>
-                    <p className="empty-hint">Import from Gmail to auto-detect your subscriptions,<br />or add them manually.</p>
+                    <p className="empty-hint">
+                      Click <strong>Scan emails</strong> to let AI find your active subscriptions,
+                      <br />or add them manually.
+                    </p>
                     <div className="empty-actions">
-                      <button className="btn btn-gmail" onClick={() => connectGmail()} disabled={isSyncing}>
-                        📧 Connect Gmail
+                      <button
+                        className="btn btn-gmail"
+                        onClick={() => gmailToken && scanEmails(gmailToken)}
+                        disabled={isSyncing}
+                      >
+                        🔍 Scan emails
                       </button>
                       <button className="btn btn-ghost" onClick={openAdd}>+ Add manually</button>
                     </div>
@@ -338,7 +400,7 @@ export default function App() {
                 ) : (
                   <>
                     <p>No subscriptions match your filters</p>
-                    <button className="btn btn-ghost" onClick={() => { setSearch(''); setFilterCategory('All'); setFilterStatus('all'); }}>
+                    <button className="btn btn-ghost" onClick={() => { setSearch(''); setFilterCategory('All'); setFilterStatus('active'); }}>
                       Clear filters
                     </button>
                   </>
@@ -439,7 +501,7 @@ export default function App() {
 
       {isSyncing && (
         <div className="toast toast-syncing">
-          <span className="spinner" /> Scanning Gmail for billing emails…
+          <span className="spinner" /> {syncStatus || 'Scanning emails…'}
         </div>
       )}
 
