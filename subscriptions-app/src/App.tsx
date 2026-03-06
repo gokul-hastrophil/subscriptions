@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useGoogleLogin } from '@react-oauth/google';
 import './App.css';
 import SubscriptionCard from './components/SubscriptionCard';
@@ -12,6 +12,7 @@ import type { Category, GoogleUser, SortDirection, SortField, Subscription } fro
 import type { ParsedSubscription } from './services/gmail';
 import { fetchBillingEmails, fetchUserProfile, parsedToSubscription, prepareEmailsForAI } from './services/gmail';
 import { analyzeEmailsForSubscriptions, getEffectiveKey } from './services/gemini';
+import { loginToBackend, syncSubscriptions, deleteFromBackend } from './services/backend';
 import {
   daysUntilRenewal,
   formatCurrency,
@@ -22,6 +23,7 @@ import {
 } from './utils';
 
 const STORAGE_KEY = 'subscriptions-data';
+const USER_PROFILE_KEY = 'user-profile';
 
 function loadSubscriptions(): Subscription[] {
   try {
@@ -35,6 +37,15 @@ function saveSubscriptions(subs: Subscription[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(subs));
 }
 
+/** Restore persisted user profile so the user doesn't have to re-login on every page load. */
+function loadStoredUser(): GoogleUser | null {
+  try {
+    const raw = localStorage.getItem(USER_PROFILE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return null;
+}
+
 export default function App() {
   const [subscriptions, setSubscriptions] = useState<Subscription[]>(loadSubscriptions);
   const [modalOpen, setModalOpen] = useState(false);
@@ -46,8 +57,8 @@ export default function App() {
   const [sortDir, setSortDir] = useState<SortDirection>('asc');
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
-  // Auth state
-  const [user, setUser] = useState<GoogleUser | null>(null);
+  // Auth state — restored from localStorage so login persists across page refreshes
+  const [user, setUser] = useState<GoogleUser | null>(loadStoredUser);
   const [gmailToken, setGmailToken] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
@@ -58,9 +69,39 @@ export default function App() {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [parsedEmails, setParsedEmails] = useState<ParsedSubscription[] | null>(null);
 
+  // Tracks whether we should auto-scan after getting a fresh Gmail token
+  const pendingScanRef = useRef(false);
+
+  // ── On mount: if user is already stored, load their data from Supabase backend ─
+
+  useEffect(() => {
+    const stored = loadStoredUser();
+    if (stored) {
+      loginToBackend(stored)
+        .then(({ subscriptions: backendSubs, isNewUser }) => {
+          if (!isNewUser && backendSubs.length > 0) {
+            // Returning user — use backend data (source of truth)
+            setSubscriptions(backendSubs);
+            saveSubscriptions(backendSubs);
+          }
+          // isNewUser=true means first ever login, keep whatever is in localStorage
+        })
+        .catch(() => {
+          // Backend unreachable — fall back to localStorage silently
+        });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Subscription mutations ─────────────────────────────────────────────────
+
   function mutate(next: Subscription[]) {
     setSubscriptions(next);
     saveSubscriptions(next);
+    // Sync to backend (fire-and-forget)
+    if (user) {
+      syncSubscriptions(user.email, next).catch(() => {});
+    }
   }
 
   function handleSave(sub: Subscription) {
@@ -73,6 +114,8 @@ export default function App() {
   function handleDelete(id: string) {
     if (deleteConfirm === id) {
       mutate(subscriptions.filter((s) => s.id !== id));
+      // Also remove from backend
+      if (user) deleteFromBackend(user.email, id).catch(() => {});
       setDeleteConfirm(null);
     } else {
       setDeleteConfirm(id);
@@ -112,6 +155,7 @@ export default function App() {
     },
     onError: () => {
       setIsLoggingIn(false);
+      pendingScanRef.current = false;
       setLoginError('Google sign-in was cancelled or failed.');
     },
   });
@@ -121,17 +165,33 @@ export default function App() {
     setLoginError(null);
     try {
       const profile = await fetchUserProfile(accessToken);
+
+      // Persist user profile so next page load skips the login screen
+      localStorage.setItem(USER_PROFILE_KEY, JSON.stringify(profile));
       setUser(profile);
       setGmailToken(accessToken);
-      await scanEmails(accessToken);
+
+      // Register user in backend & check if they have existing data
+      const { subscriptions: backendSubs, isNewUser } = await loginToBackend(profile);
+
+      if (!isNewUser && backendSubs.length > 0) {
+        // Returning user with saved data — load from DB, don't re-scan
+        setSubscriptions(backendSubs);
+        saveSubscriptions(backendSubs);
+      } else {
+        // New user (or user with no DB data) — auto-scan Gmail
+        await scanEmails(accessToken);
+      }
     } catch (e) {
       setLoginError(e instanceof Error ? e.message : 'Sign-in failed.');
     } finally {
       setIsLoggingIn(false);
+      pendingScanRef.current = false;
     }
   }
 
   function handleSignOut() {
+    localStorage.removeItem(USER_PROFILE_KEY);
     setUser(null);
     setGmailToken(null);
     setParsedEmails(null);
@@ -164,6 +224,24 @@ export default function App() {
       setSyncStatus('');
     }
   }
+
+  /**
+   * Triggered by the "Scan emails" button.
+   * If we already have a Gmail token (user just logged in), scan immediately.
+   * If the token expired (page was refreshed), trigger a silent Google re-auth first.
+   */
+  function handleScanClick() {
+    if (gmailToken) {
+      scanEmails(gmailToken);
+    } else {
+      // Mark that we want to scan right after getting a fresh token
+      pendingScanRef.current = true;
+      signIn();
+    }
+  }
+
+  // If signIn was triggered by "Scan emails" (pendingScanRef), scanEmails runs inside handleLogin.
+  // handleLogin checks pendingScanRef and skips the "isNewUser" branch accordingly.
 
   function handleImport(selected: ParsedSubscription[]) {
     const existingNames = new Set(subscriptions.map((s) => s.name.toLowerCase()));
@@ -257,9 +335,9 @@ export default function App() {
           <div className="header-actions">
             <button
               className="btn btn-gmail-connected"
-              onClick={() => gmailToken && scanEmails(gmailToken)}
-              disabled={isSyncing || !gmailToken}
-              title="Re-scan inbox for subscriptions"
+              onClick={handleScanClick}
+              disabled={isSyncing}
+              title="Scan inbox for subscriptions"
             >
               {isSyncing ? (
                 <><span className="spinner" /> <span className="btn-add-label">Scanning…</span></>
@@ -389,7 +467,7 @@ export default function App() {
                     <div className="empty-actions">
                       <button
                         className="btn btn-gmail"
-                        onClick={() => gmailToken && scanEmails(gmailToken)}
+                        onClick={handleScanClick}
                         disabled={isSyncing}
                       >
                         🔍 Scan emails

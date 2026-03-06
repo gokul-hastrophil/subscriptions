@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npm --prefix subscriptions-app install && npm --prefix subscriptions-app run build",
+  "buildCommand": "npm install && npm --prefix subscriptions-app install && npm --prefix subscriptions-app run build",
   "outputDirectory": "subscriptions-app/dist",
   "framework": "vite"
 }
