@@ -3,7 +3,10 @@ import type { EmailForAI, ParsedSubscription } from './gmail';
 import { formatCurrency, generateId, toMonthly, toYearly } from '../utils';
 
 const STORAGE_KEY = 'substracks-gemini-key';
-const MODEL = 'gemini-3.1-flash-lite';
+// Best reasoning model for financial insights
+const MODEL_INSIGHTS = 'gemini-3.1-pro-preview';
+// Fast model for structured email extraction
+const MODEL_EMAIL = 'gemini-3-flash-preview';
 
 // Env var (set in Vercel) takes priority; localStorage is the manual fallback.
 const ENV_KEY: string = import.meta.env.VITE_GEMINI_API_KEY ?? '';
@@ -53,7 +56,7 @@ export async function fetchAIInsights(
     `Use bullet points. Write in plain text — no markdown # headers.`;
 
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_INSIGHTS}:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -133,7 +136,7 @@ async function callGeminiForEmails(
     `EMAILS:\n${emailList}`;
 
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_EMAIL}:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
